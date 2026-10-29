@@ -12,6 +12,7 @@ venv/
 
 # Local project notes (not for the remote)
 HANDOFF.md
+REQUIREMENTS_SPEC.md
 
 # IDEs
 .vscode/
@@ -22,3 +23,8 @@ HANDOFF.md
 # OS
 .DS_Store
 Thumbs.db
+
+# StreamStats local geospatial downloads (NHDPlus etc.)
+# Keep the README; ignore the multi-GB binaries and extracts.
+streamstats/data/nhdplus_v2/**
+!streamstats/data/nhdplus_v2/README.md
