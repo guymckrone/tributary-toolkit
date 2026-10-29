@@ -6,10 +6,12 @@ Services were shut down Jan 30, 2026):
     https://streamstats.usgs.gov/ss-delineate
 
 Done so far:
-    _get_json()  — HTTP plumbing
-    snap()       — pour point on the network (sshydro)
+    _get_json()   — HTTP plumbing
+    snap()        — pour point on the network (sshydro)
+    watershed()   — basin polygon from the same sshydro call
+    delineate()   — thin alias for watershed()
 
-Still stubbed: watershed, basin_attributes.
+Still stubbed: basin_attributes.
 """
 
 from typing import Any, Dict, List, Optional
@@ -27,6 +29,10 @@ class StreamStatsClient:
 
     # Base for relative paths I pass to _get_json.
     BASE_URL = "https://streamstats.usgs.gov/ss-delineate"
+
+    # Off-network pour points sometimes still return a 4–5
+    # vertex "basin" (one DEM cell). Treat those as junk.
+    MIN_BASIN_VERTICES = 8
 
     def __init__(self, timeout: int = 60, verify_ssl: bool = True):
         # timeout: delineation can be slow.
@@ -165,62 +171,203 @@ class StreamStatsClient:
         """
         region = self._normalize_region(region)
         payload = self._sshydro(latitude, longitude, region)
-        points = self._named_features(payload, "globalwatershedpoint")
+        # Refuse to guess if zero / many points — same rule as
+        # our data sources when multiple series match.
+        feature = self._one_named_feature(
+            payload,
+            "globalwatershedpoint",
+            region=region,
+            latitude=latitude,
+            longitude=longitude,
+        )
+        # GeoJSON Point coords are [lon, lat]; the helper flips
+        # them into latitude / longitude keys for callers.
+        return self._snap_dict_from_feature(
+            feature,
+            region=region,
+            request_latitude=latitude,
+            request_longitude=longitude,
+        )
 
-        if not points:
-            raise ValueError(
-                f"No globalwatershedpoint in sshydro response "
-                f"for region={region}, lat={latitude}, "
-                f"lon={longitude}."
-            )
-        if len(points) > 1:
-            # Refuse to guess which pour point — same rule as
-            # our data sources when multiple series match.
-            raise ValueError(
-                f"Expected one globalwatershedpoint, got "
-                f"{len(points)} for region={region}, "
-                f"lat={latitude}, lon={longitude}."
-            )
+    @staticmethod
+    def _geometry_is_empty(geometry: Optional[Dict[str, Any]]) -> bool:
+        """True when GeoJSON has no usable coordinates."""
+        if not geometry:
+            return True
+        coords = geometry.get("coordinates")
+        if coords is None:
+            return True
+        # Empty polygon: [] or [[]] — both show up from SS-Delineate
+        # when the upstream basin layer has nothing.
+        if coords == [] or coords == [[]]:
+            return True
+        return False
 
-        feature = points[0]
+    @staticmethod
+    def _count_vertices(coordinates: Any) -> int:
+        """Count coordinate pairs in nested GeoJSON rings."""
+        if not isinstance(coordinates, (list, tuple)) or not coordinates:
+            return 0
+        # A position is [lon, lat, …] — numbers, not nested lists.
+        if not isinstance(coordinates[0], (list, tuple)):
+            return 1
+        return sum(
+            StreamStatsClient._count_vertices(part)
+            for part in coordinates
+        )
+
+    def _snap_dict_from_feature(
+        self,
+        feature: Dict[str, Any],
+        *,
+        region: str,
+        request_latitude: float,
+        request_longitude: float,
+    ) -> Dict[str, Any]:
+        """Build the same snap dict snap() returns, from one feature."""
         geometry = feature.get("geometry") or {}
         coords = geometry.get("coordinates") or []
         if len(coords) < 2:
             raise ValueError(
                 "globalwatershedpoint has no coordinates "
-                f"(region={region}, lat={latitude}, "
-                f"lon={longitude})."
+                f"(region={region}, lat={request_latitude}, "
+                f"lon={request_longitude})."
             )
 
-        # GeoJSON Point: [longitude, latitude]
         snapped_lon = float(coords[0])
         snapped_lat = float(coords[1])
-
         props = feature.get("properties") or {}
         warning = (props.get("WarningMsg") or "").strip(" ,")
-        # USGS sometimes returns a warning even with a point —
-        # surface it so the UI can show "results may be inaccurate".
         snappable = "not snappable" not in warning.lower()
 
         return {
             "latitude": snapped_lat,
             "longitude": snapped_lon,
             "region": region,
-            "request_latitude": float(latitude),
-            "request_longitude": float(longitude),
+            "request_latitude": float(request_latitude),
+            "request_longitude": float(request_longitude),
             "huc_id": props.get("HUCID") or props.get("HUC_ID") or "",
             "warning": warning,
             "snappable": snappable,
         }
 
-    def watershed(self, latitude: float, longitude: float):
+    def _one_named_feature(
+        self,
+        payload: Dict[str, Any],
+        layer_name: str,
+        *,
+        region: str,
+        latitude: float,
+        longitude: float,
+    ) -> Dict[str, Any]:
+        """Exactly one feature for a layer, or raise."""
+        features = self._named_features(payload, layer_name)
+        if not features:
+            raise ValueError(
+                f"No {layer_name} in sshydro response "
+                f"for region={region}, lat={latitude}, "
+                f"lon={longitude}."
+            )
+        if len(features) > 1:
+            raise ValueError(
+                f"Expected one {layer_name}, got {len(features)} "
+                f"for region={region}, lat={latitude}, "
+                f"lon={longitude}."
+            )
+        return features[0]
+
+    def watershed(
+        self,
+        latitude: float,
+        longitude: float,
+        region: str = "OR",
+    ) -> Dict[str, Any]:
         """Delineate a watershed for one pour point.
 
-        Not implemented yet — Step 3.
+        One sshydro call → snapped point + globalwatershed
+        polygon. Rejects empty / missing basin geometry instead
+        of handing the UI a blank Feature.
+
+        Returns:
+            snap            — same dict shape as snap()
+            basin_geojson   — the basin Feature (Polygon)
+            geometry_type   — e.g. "Polygon"
+            vertex_count    — rough size of the ring(s)
+            shape_area      — USGS Shape_Area when present
+            warning         — basin WarningMsg (may differ
+                              from snap["warning"])
         """
-        raise NotImplementedError(
-            "StreamStatsClient.watershed() — Step 3"
+        region = self._normalize_region(region)
+        payload = self._sshydro(latitude, longitude, region)
+
+        point_feature = self._one_named_feature(
+            payload,
+            "globalwatershedpoint",
+            region=region,
+            latitude=latitude,
+            longitude=longitude,
         )
+        snap_info = self._snap_dict_from_feature(
+            point_feature,
+            region=region,
+            request_latitude=latitude,
+            request_longitude=longitude,
+        )
+
+        basin_feature = self._one_named_feature(
+            payload,
+            "globalwatershed",
+            region=region,
+            latitude=latitude,
+            longitude=longitude,
+        )
+        geometry = basin_feature.get("geometry") or {}
+        if self._geometry_is_empty(geometry):
+            raise ValueError(
+                "globalwatershed geometry is empty "
+                f"(region={region}, lat={latitude}, "
+                f"lon={longitude}). Point may be off-network "
+                f"or outside StreamStats coverage."
+            )
+
+        props = basin_feature.get("properties") or {}
+        basin_warning = (props.get("WarningMsg") or "").strip(" ,")
+        shape_area = props.get("Shape_Area")
+        vertex_count = self._count_vertices(
+            geometry.get("coordinates")
+        )
+        if vertex_count < self.MIN_BASIN_VERTICES:
+            raise ValueError(
+                "globalwatershed looks degenerate "
+                f"({vertex_count} vertices, need >= "
+                f"{self.MIN_BASIN_VERTICES}; "
+                f"region={region}, lat={latitude}, "
+                f"lon={longitude}). "
+                f"snap snappable={snap_info['snappable']}; "
+                f"warning={basin_warning or snap_info['warning']!r}."
+            )
+
+        return {
+            "snap": snap_info,
+            "basin_geojson": basin_feature,
+            "geometry_type": geometry.get("type") or "",
+            "vertex_count": vertex_count,
+            "shape_area": shape_area,
+            "warning": basin_warning,
+            "region": region,
+        }
+
+    def delineate(
+        self,
+        latitude: float,
+        longitude: float,
+        region: str = "OR",
+    ) -> Dict[str, Any]:
+        """Convenience alias — same as watershed().
+
+        One network call; snap lives under result["snap"].
+        """
+        return self.watershed(latitude, longitude, region=region)
 
     def basin_attributes(self, workspace_id: str):
         """Fetch StreamStats characteristics for a workspace.
