@@ -45,9 +45,9 @@ def main() -> None:
     with col_ss:
         st.markdown("### StreamStats")
         st.write(
-            "Batch watershed work from points: snap to the stream "
-            "network, delineate basins, pull StreamStats attributes. "
-            "UI shell is here; API wiring comes next."
+            "Snap a point to the stream network and delineate its "
+            "watershed (map + GeoJSON download). Batch points, "
+            "flowlines, and basin attributes come later."
         )
         st.caption("Open **StreamStats** in the sidebar →")
 

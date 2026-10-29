@@ -57,7 +57,7 @@ Browser opens at `http://localhost:8501`. Sidebar pages:
 |---|---|
 | **Home** (`app.py`) | Toolkit overview |
 | **Data Download** | Full gage/time-series GUI |
-| **StreamStats** | Stub — API wiring next |
+| **StreamStats** | Single point: snap + delineate, basin map, GeoJSON download |
 
 ### Data Download workflow
 
@@ -94,7 +94,7 @@ data-downloader/
   app.py                 # Toolkit home (streamlit run app.py)
   pages/                 # Data Download, StreamStats, …
   data_sources/          # BaseDataSource + USGS / Aquarius / SNOTEL + registry
-  streamstats/           # StreamStats client (stub)
+  streamstats/           # StreamStats SS-Delineate client + smoke
   gui/                   # Data Download Streamlit modules
   analysis/              # Storm / gauge analysis (precip SQLite → storms)
   tests/                 # Live hammer_test.py
