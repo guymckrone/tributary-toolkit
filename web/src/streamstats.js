@@ -7,7 +7,7 @@
 
 import L from "leaflet";
 import "leaflet/dist/leaflet.css";
-import { apiGet, apiPost, saveBlob, saveJson } from "./api.js";
+import { apiPost, saveBlob, saveJson } from "./api.js";
 
 const DEFAULT_LAT = 45.3725;
 const DEFAULT_LON = -122.5858;
@@ -35,7 +35,7 @@ export function mountStreamStats(root) {
             <input id="ss-ssl" type="checkbox" checked />
             Verify SSL
           </label>
-          <p class="hint">Turn this off on the work network. It covers snap and delineate. Stream lines always skip this check.</p>
+          <p class="hint">Turn this off on the work network. It covers snap and delineate.</p>
           <div class="actions">
             <button id="ss-snap" type="button">Snap</button>
             <button id="ss-delin" class="primary" type="button">Delineate watershed</button>
@@ -56,10 +56,7 @@ export function mountStreamStats(root) {
         </section>
       </div>
       <section class="panel">
-        <div class="actions" style="margin-top:0">
-          <button id="ss-flow" type="button">Load streams in this view</button>
-        </div>
-        <p class="hint">Streams are a guide for aiming. Snap still uses SS-Delineate.</p>
+        <p class="hint">Hydro tiles are a guide for aiming. Snap still uses SS-Delineate, which can see channels the tiles do not draw. The layer control can hide the tiles.</p>
         <div id="ss-map" class="map"></div>
       </section>
     </div>
@@ -76,14 +73,26 @@ export function mountStreamStats(root) {
   const batchTable = root.querySelector("#ss-batch-table");
 
   const map = L.map(root.querySelector("#ss-map")).setView([DEFAULT_LAT, DEFAULT_LON], 12);
-  L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
+  const streets = L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
     attribution: "&copy; OpenStreetMap",
     maxZoom: 18,
   }).addTo(map);
+  // ArcGIS cached tiles are /tile/{z}/{y}/{x}, not Leaflet's {z}/{x}/{y}.
+  // Pre-drawn pictures, so a zoomed-out state still looks complete.
+  const hydroTiles = L.tileLayer(
+    "https://basemap.nationalmap.gov/arcgis/rest/services/USGSHydroCached/MapServer/tile/{z}/{y}/{x}",
+    {
+      maxNativeZoom: 16,
+      maxZoom: 18,
+      opacity: 0.7,
+      attribution: "USGS The National Map",
+    },
+  ).addTo(map);
 
-  const flowLayer = L.geoJSON(null, {
-    style: { color: "#7f9cb5", weight: 1.5, opacity: 0.85 },
-  }).addTo(map);
+  L.control.layers(
+    { Streets: streets },
+    { "Hydro (tiles)": hydroTiles },
+  ).addTo(map);
   const basinLayer = L.geoJSON(null, {
     style: { color: "#2ca02c", weight: 2, fillColor: "#2ca02c", fillOpacity: 0.2 },
   }).addTo(map);
@@ -265,25 +274,6 @@ export function mountStreamStats(root) {
       placeSnap(watershed.snap);
       drawBasin(watershed.basin_geojson, true);
       showSingle(watershed.snap, watershed);
-    });
-  });
-
-  root.querySelector("#ss-flow").addEventListener("click", (ev) => {
-    withBusy(ev.currentTarget, "Loading…", async () => {
-      const b = map.getBounds();
-      const q = new URLSearchParams({
-        west: b.getWest(),
-        south: b.getSouth(),
-        east: b.getEast(),
-        north: b.getNorth(),
-      });
-      const data = await apiGet(`/api/flowlines?${q}`);
-      flowLayer.clearLayers();
-      flowLayer.addData(data.geojson);
-      flowLayer.bringToBack();
-      statusEl.textContent = data.capped
-        ? `Loaded ${data.count} streams (service cap of 2000 — zoom in for more).`
-        : `Loaded ${data.count} streams.`;
     });
   });
 

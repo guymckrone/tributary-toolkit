@@ -9,8 +9,6 @@ The Vite dev server (web/) proxies /api to this process.
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from .flowlines import fetch_flowlines
-from .errors import http_error
 from .sources import router as sources_router
 from .streamstats import router as streamstats_router
 
@@ -41,17 +39,3 @@ app.include_router(sources_router, prefix="/api/sources")
 @app.get("/api/health")
 def health() -> dict:
     return {"status": "ok"}
-
-
-@app.get("/api/flowlines")
-def flowlines(
-    west: float,
-    south: float,
-    east: float,
-    north: float,
-) -> dict:
-    # No verify_ssl here on purpose. Stream lines always skip the check.
-    try:
-        return fetch_flowlines(west, south, east, north)
-    except Exception as exc:
-        raise http_error(exc) from exc
