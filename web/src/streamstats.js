@@ -38,6 +38,16 @@ export function mountStreamStats(root) {
             Verify SSL
           </label>
           <p class="hint">Turn this off on the work network. It covers snap and delineate.</p>
+          <label class="check">
+            <input id="ss-bcs" type="checkbox" />
+            Include basin characteristics
+          </label>
+          <p class="hint">After a basin succeeds, a second USGS call computes drainage area, elevation, precipitation, and the rest of that state's list. Another minute or so per basin.</p>
+          <label class="check">
+            <input id="ss-flowstats" type="checkbox" />
+            Include flow statistics
+          </label>
+          <p class="hint">Needs the basin characteristics. USGS regression equations then estimate peak flows, low flows, and the other groups for this state. A value outside an equation's range is kept and flagged. Another minute or so.</p>
           <p id="ss-status" class="status"></p>
           <div id="ss-error"></div>
           <div id="ss-single">
@@ -59,9 +69,11 @@ export function mountStreamStats(root) {
             <div id="ss-result"></div>
           </div>
           <div id="ss-multi-panel" hidden>
-            <p class="hint">Each click adds a point. Drag a number to move it. Deleting pt-1 makes the next new point pt-1 again. Cap 25. Several basins download as one zip, because a browser will block a burst of separate downloads.</p>
+            <p class="hint">Each click adds a point. Drag a number to move it. Snap moves each point onto the stream before you delineate. Deleting pt-1 makes the next new point pt-1 again. Cap 25.</p>
             <div id="ss-picks" class="scroll"></div>
+            <div id="ss-pick-note"></div>
             <div class="actions">
+              <button id="ss-pick-snap" type="button">Snap picked points</button>
               <button id="ss-pick-go" type="button">Delineate picked points</button>
               <button id="ss-pick-clear" type="button">Clear all</button>
             </div>
@@ -89,6 +101,14 @@ export function mountStreamStats(root) {
   const lonInput = root.querySelector("#ss-lon");
   const regionInput = root.querySelector("#ss-region");
   const sslInput = root.querySelector("#ss-ssl");
+  const bcBox = root.querySelector("#ss-bcs");
+  const flowBox = root.querySelector("#ss-flowstats");
+  flowBox.addEventListener("change", () => {
+    if (flowBox.checked) bcBox.checked = true;
+  });
+  bcBox.addEventListener("change", () => {
+    if (!bcBox.checked) flowBox.checked = false;
+  });
   const statusEl = root.querySelector("#ss-status");
   const errorEl = root.querySelector("#ss-error");
   const resultEl = root.querySelector("#ss-result");
@@ -184,7 +204,7 @@ export function mountStreamStats(root) {
     });
   }
 
-  function showSingle(snap, watershed) {
+  function showSingle(snap, watershed, characteristics, charError, flows, flowError) {
     const bits = [];
     if (snap) {
       bits.push("<h3>Snapped pour point</h3>");
@@ -202,8 +222,24 @@ export function mountStreamStats(root) {
         <tr><th>Warning</th><td></td></tr>
       </table>`);
       bits.push(`<div class="actions">${FORMAT_PICKER}<button id="ss-geo" type="button">Download</button></div>`);
-      bits.push(`<p class="hint">Shape_Area is whatever SS-Delineate reports. Units not confirmed. A shapefile arrives as a zip of the .shp, .shx, .dbf, and .prj files.</p>`);
+      bits.push(`<p class="hint">Shape_Area is whatever SS-Delineate reports. Units not confirmed. A shapefile arrives as a zip of the .shp, .shx, .dbf, and .prj files. Basin characteristics and flow statistics, when present, ride along as CSV files.</p>`);
     }
+    if (characteristics && characteristics.length) {
+      bits.push("<h3>Basin characteristics</h3>");
+      bits.push(`<div class="scroll"><table id="ss-bc-table">
+        <tr><th>Code</th><th>Name</th><th>Value</th><th>Unit</th></tr>
+        ${characteristics.map(() => `<tr><td></td><td></td><td></td><td></td></tr>`).join("")}
+      </table></div>`);
+    }
+    if (charError) bits.push(`<p class="warn" id="ss-bc-err"></p>`);
+    if (flows && flows.length) {
+      bits.push("<h3>Flow statistics</h3>");
+      bits.push(`<div class="scroll"><table id="ss-flow-table">
+        <tr><th>Group</th><th>Code</th><th>Name</th><th>Value</th><th>Unit</th><th>Region</th><th>Equation</th><th>Warning</th></tr>
+        ${flows.map(() => `<tr><td></td><td></td><td></td><td></td><td></td><td></td><td></td><td></td></tr>`).join("")}
+      </table></div>`);
+    }
+    if (flowError) bits.push(`<p class="warn" id="ss-flow-err"></p>`);
     resultEl.innerHTML = bits.join("");
     const tables = resultEl.querySelectorAll("table");
     if (snap && tables[0]) {
@@ -228,9 +264,42 @@ export function mountStreamStats(root) {
     if (geoBtn && watershed) {
       geoBtn.addEventListener("click", () => {
         const format = resultEl.querySelector(".ss-fmt").value;
-        downloadBasins([{ id: "watershed", watershed }], format).catch(showError);
+        downloadBasins([exportBasin({
+          id: "watershed",
+          watershed,
+          characteristics: characteristics || [],
+          flow_statistics: flows || [],
+        })], format).catch(showError);
       });
     }
+    const bcTable = resultEl.querySelector("#ss-bc-table");
+    if (bcTable && characteristics) {
+      characteristics.forEach((row, i) => {
+        const tr = bcTable.rows[i + 1];
+        tr.cells[0].textContent = row.code || "";
+        tr.cells[1].textContent = row.name || "";
+        tr.cells[2].textContent = row.value == null ? "" : String(row.value);
+        tr.cells[3].textContent = row.unit || "";
+      });
+    }
+    const bcErr = resultEl.querySelector("#ss-bc-err");
+    if (bcErr) bcErr.textContent = charError || "";
+    const flowTable = resultEl.querySelector("#ss-flow-table");
+    if (flowTable && flows) {
+      flows.forEach((row, i) => {
+        const tr = flowTable.rows[i + 1];
+        tr.cells[0].textContent = row.group || "";
+        tr.cells[1].textContent = row.code || "";
+        tr.cells[2].textContent = row.name || "";
+        tr.cells[3].textContent = row.value == null ? "" : String(row.value);
+        tr.cells[4].textContent = row.unit || "";
+        tr.cells[5].textContent = row.regression_region || "";
+        tr.cells[6].textContent = row.equation || "";
+        tr.cells[7].textContent = row.errors_or_limits || "";
+      });
+    }
+    const flowErr = resultEl.querySelector("#ss-flow-err");
+    if (flowErr) flowErr.textContent = flowError || "";
   }
 
   function placeSnap(snap) {
@@ -376,6 +445,7 @@ export function mountStreamStats(root) {
 
   root.querySelector("#ss-pick-clear").addEventListener("click", () => {
     pickedPoints = [];
+    root.querySelector("#ss-pick-note").innerHTML = "";
     drawPicks();
     renderPicks();
   });
@@ -424,13 +494,73 @@ export function mountStreamStats(root) {
     withBusy(ev.currentTarget, "Delineating…", async () => {
       statusEl.textContent = "Delineating watershed… this can take most of a minute.";
       const watershed = await apiPost("/api/streamstats/watershed", pointFromInputs());
+      if (root.querySelector("#ss-bcs").checked) {
+        statusEl.textContent = "Computing basin characteristics…";
+      }
+      const loaded = await characteristicsFor(watershed);
+      const flows = await flowFor(watershed, loaded.rows);
       statusEl.textContent = "";
       lastBasin = watershed;
       placeSnap(watershed.snap);
       drawBasin(watershed.basin_geojson, true);
-      showSingle(watershed.snap, watershed);
+      showSingle(watershed.snap, watershed, loaded.rows, loaded.error, flows.rows, flows.error);
     });
   });
+
+  // SS-Hydro wants the delineation's bcrequest back. I do not
+  // ask it to draw the basin again. A failure here stays on the
+  // row; the polygon already succeeded.
+  async function characteristicsFor(watershed) {
+    if (!root.querySelector("#ss-bcs").checked) return { rows: null, error: "" };
+    if (!watershed || !watershed.bcrequest) {
+      return { rows: null, error: "No delineation payload to compute characteristics from." };
+    }
+    statusEl.textContent = statusEl.textContent || "Computing basin characteristics…";
+    try {
+      const data = await apiPost(
+        "/api/streamstats/characteristics",
+        {
+          region: regionInput.value,
+          bcrequest: watershed.bcrequest,
+          labels: "*",
+          verify_ssl: sslInput.checked,
+        },
+        180000,
+      );
+      return { rows: data.characteristics || [], error: "" };
+    } catch (err) {
+      return { rows: null, error: err.message || String(err) };
+    }
+  }
+
+  // NSS wants the polygon plus the characteristic values. A
+  // missing parameter is an error from the API. I do not fill
+  // the USGS placeholder myself.
+  async function flowFor(watershed, characteristics) {
+    if (!root.querySelector("#ss-flowstats").checked) return { rows: null, error: "" };
+    if (!characteristics || !characteristics.length) {
+      return {
+        rows: null,
+        error: "Flow statistics need basin characteristics, and those did not come back.",
+      };
+    }
+    statusEl.textContent = "Computing flow statistics…";
+    try {
+      const data = await apiPost(
+        "/api/streamstats/flowstats",
+        {
+          region: regionInput.value,
+          basin_geojson: watershed.basin_geojson,
+          characteristics,
+          verify_ssl: sslInput.checked,
+        },
+        180000,
+      );
+      return { rows: data.statistics || [], error: "" };
+    } catch (err) {
+      return { rows: null, error: err.message || String(err) };
+    }
+  }
 
   // CSV rows and map picks both end here. One request per point:
   // a bad point only fails its own row, and finished basins stay.
@@ -457,7 +587,23 @@ export function mountStreamStats(root) {
           },
           150000,
         );
-        results.push({ id, ok: true, error: "", watershed });
+        if (root.querySelector("#ss-bcs").checked) {
+          statusEl.textContent = `Characteristics ${i + 1} of ${points.length}…`;
+        }
+        const loaded = await characteristicsFor(watershed);
+        if (root.querySelector("#ss-flowstats").checked) {
+          statusEl.textContent = `Flow statistics ${i + 1} of ${points.length}…`;
+        }
+        const flows = await flowFor(watershed, loaded.rows);
+        const problems = [loaded.error, flows.error].filter(Boolean);
+        results.push({
+          id,
+          ok: true,
+          error: problems.join(" "),
+          watershed,
+          characteristics: loaded.rows,
+          flow_statistics: flows.rows,
+        });
       } catch (err) {
         results.push({ id, ok: false, error: err.message || String(err), watershed: null });
       }
@@ -471,6 +617,59 @@ export function mountStreamStats(root) {
     drawBatch(batchResults);
     renderBatch(batchResults);
   }
+
+  // Same sshydro call as a single Snap. I move the marker only
+  // when StreamStats says the point is snappable, so a miss
+  // stays put and I can drag it closer.
+  async function snapPicked() {
+    readPickIds();
+    if (!pickedPoints.length) throw new Error("Pick a point on the map first.");
+    const note = root.querySelector("#ss-pick-note");
+    note.innerHTML = "";
+    const problems = [];
+    for (const [i, point] of pickedPoints.entries()) {
+      statusEl.textContent = `Snapping ${i + 1} of ${pickedPoints.length}…`;
+      try {
+        const snap = await apiPost(
+          "/api/streamstats/snap",
+          {
+            latitude: point.latitude,
+            longitude: point.longitude,
+            region: regionInput.value,
+            verify_ssl: sslInput.checked,
+          },
+          150000,
+        );
+        if (snap.snappable) {
+          point.latitude = Math.round(snap.latitude * 1e6) / 1e6;
+          point.longitude = Math.round(snap.longitude * 1e6) / 1e6;
+          point.snapNote = "";
+        } else {
+          point.snapNote = snap.warning || "Not snappable.";
+          problems.push(`${point.id}: ${point.snapNote}`);
+        }
+      } catch (err) {
+        point.snapNote = err.message || String(err);
+        problems.push(`${point.id}: ${point.snapNote}`);
+      }
+    }
+    drawPicks();
+    renderPicks();
+    const moved = pickedPoints.length - problems.length;
+    statusEl.textContent = problems.length
+      ? `Snapped ${moved} of ${pickedPoints.length}. The rest stayed where they were.`
+      : `Snapped ${pickedPoints.length} onto the stream. Delineate uses these spots.`;
+    if (problems.length) {
+      const text = problems.map((line) =>
+        line.replace(/[&<>]/g, (ch) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;" }[ch])),
+      );
+      note.innerHTML = `<p class="warn">${text.join("<br>")}</p>`;
+    }
+  }
+
+  root.querySelector("#ss-pick-snap").addEventListener("click", (ev) => {
+    withBusy(ev.currentTarget, "Snapping…", snapPicked);
+  });
 
   root.querySelector("#ss-pick-go").addEventListener("click", (ev) => {
     withBusy(ev.currentTarget, "Delineating…", async () => {
@@ -508,13 +707,12 @@ export function mountStreamStats(root) {
 
   function renderBatch(results) {
     const head = `<table>
-      <tr><th>Id</th><th>Snap</th><th>Vertices</th><th>Error</th></tr>
-      ${results.map(() => `<tr><td></td><td></td><td></td><td></td></tr>`).join("")}
+      <tr><th>Id</th><th>Snap</th><th>Vertices</th><th>BCs</th><th>Flows</th><th>Error</th></tr>
+      ${results.map(() => `<tr><td></td><td></td><td></td><td></td><td></td><td></td></tr>`).join("")}
     </table>
     <div class="actions">
       ${FORMAT_PICKER}
       <button id="ss-fc" type="button">Download basins</button>
-      <button id="ss-rcsv" type="button">Download results CSV</button>
     </div>
     <p class="hint">More than one basin comes back as a zip of separate files. A browser will block a burst of individual downloads.</p>`;
     batchTable.innerHTML = head;
@@ -527,34 +725,17 @@ export function mountStreamStats(root) {
         ? `${Number(snap.latitude).toFixed(5)}, ${Number(snap.longitude).toFixed(5)}`
         : "";
       tr.cells[2].textContent = row.ok ? String(row.watershed.vertex_count ?? "") : "";
-      tr.cells[3].textContent = row.error || "";
+      tr.cells[3].textContent = row.characteristics ? String(row.characteristics.length) : "";
+      tr.cells[4].textContent = row.flow_statistics ? String(row.flow_statistics.length) : "";
+      tr.cells[5].textContent = row.error || "";
     });
     batchTable.querySelector("#ss-fc").addEventListener("click", () => {
       const format = batchTable.querySelector(".ss-fmt").value;
       // Failed rows have no polygon. Leave them out.
       const basins = results
         .filter((row) => row.ok && row.watershed && row.watershed.basin_geojson)
-        .map((row) => ({ id: row.id, watershed: row.watershed }));
+        .map((row) => exportBasin(row));
       downloadBasins(basins, format).catch(showError);
-    });
-    batchTable.querySelector("#ss-rcsv").addEventListener("click", () => {
-      const lines = ["id,request_lat,request_lon,snap_lat,snap_lon,snappable,vertices,area,error"];
-      for (const row of results) {
-        const ws = row.watershed || {};
-        const snap = ws.snap || {};
-        lines.push([
-          csvCell(row.id),
-          snap.request_latitude ?? "",
-          snap.request_longitude ?? "",
-          snap.latitude ?? "",
-          snap.longitude ?? "",
-          snap.snappable ?? "",
-          ws.vertex_count ?? "",
-          ws.shape_area ?? "",
-          csvCell(row.error || ""),
-        ].join(","));
-      }
-      saveBlob(new Blob([lines.join("\n")], { type: "text/csv" }), "watershed_results.csv");
     });
   }
 
@@ -565,17 +746,23 @@ export function mountStreamStats(root) {
   };
 }
 
+/** Drop the delineation payload. The file only needs the polygon. */
+function exportBasin(row) {
+  const watershed = { ...(row.watershed || {}) };
+  delete watershed.bcrequest;
+  return {
+    id: row.id,
+    watershed,
+    characteristics: row.characteristics || [],
+    flow_statistics: row.flow_statistics || [],
+  };
+}
+
 /** Ask Python for the file. Several basins come back as one zip. */
 async function downloadBasins(basins, format) {
   if (!basins.length) throw new Error("No watershed to download.");
   const result = await apiDownload("/api/streamstats/export", { format, basins });
   saveBlob(result.blob, result.filename);
-}
-
-function csvCell(value) {
-  const text = String(value ?? "");
-  if (/[",\n]/.test(text)) return `"${text.replaceAll('"', '""')}"`;
-  return text;
 }
 
 function splitCsvLine(line) {

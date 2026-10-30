@@ -7,6 +7,7 @@ I don't merge them into one layer — the owner wants one
 file per watershed.
 """
 
+import csv
 import io
 import json
 import zipfile
@@ -39,6 +40,8 @@ _FORMATS = ("geojson", "shp", "kml", "kmz")
 class ExportBasin(BaseModel):
     id: str = "watershed"
     watershed: Dict[str, Any] = Field(default_factory=dict)
+    characteristics: List[Dict[str, Any]] = Field(default_factory=list)
+    flow_statistics: List[Dict[str, Any]] = Field(default_factory=list)
 
 
 class ExportBody(BaseModel):
@@ -51,6 +54,11 @@ def _attrs(item: ExportBasin) -> Dict[str, Any]:
     ws = item.watershed or {}
     snap = ws.get("snap") or {}
     warning = (ws.get("warning") or snap.get("warning") or "")
+    drnarea = None
+    for row in item.characteristics or []:
+        if str(row.get("code") or "").upper() == "DRNAREA":
+            drnarea = row.get("value")
+            break
     return {
         "id": item.id or "watershed",
         "snap_lat": snap.get("latitude"),
@@ -58,6 +66,7 @@ def _attrs(item: ExportBasin) -> Dict[str, Any]:
         "region": ws.get("region") or snap.get("region") or "",
         "huc_id": snap.get("huc_id") or "",
         "shape_area": ws.get("shape_area"),
+        "drnarea": drnarea,
         "warning": str(warning)[:254],
     }
 
@@ -156,6 +165,7 @@ def basin_to_shapefile_files(item: ExportBasin, stem: str) -> Dict[str, bytes]:
         writer.field("region", "C", size=8)
         writer.field("huc_id", "C", size=20)
         writer.field("shape_area", "F", size=19, decimal=4)
+        writer.field("drnarea", "F", size=19, decimal=4)
         writer.field("warning", "C", size=254)
         writer.poly(parts)
         writer.record(
@@ -165,6 +175,7 @@ def basin_to_shapefile_files(item: ExportBasin, stem: str) -> Dict[str, bytes]:
             str(attrs["region"])[:8],
             str(attrs["huc_id"])[:20],
             attrs["shape_area"],
+            attrs["drnarea"],
             attrs["warning"],
         )
     return {
@@ -235,6 +246,57 @@ def basin_to_kml(item: ExportBasin) -> str:
     return ET.tostring(kml, encoding="unicode", xml_declaration=True)
 
 
+def _characteristics_csv(items: List[ExportBasin]) -> bytes:
+    """Long table: one row per basin and characteristic. Empty if none."""
+    buf = io.StringIO()
+    writer = csv.writer(buf)
+    writer.writerow(["id", "code", "name", "value", "unit"])
+    wrote = False
+    for item in items:
+        for row in item.characteristics or []:
+            wrote = True
+            value = row.get("value")
+            writer.writerow([
+                item.id or "watershed",
+                row.get("code") or "",
+                row.get("name") or "",
+                "" if value is None else value,
+                row.get("unit") or "",
+            ])
+    if not wrote:
+        return b""
+    return buf.getvalue().encode("utf-8")
+
+
+def _flow_csv(items: List[ExportBasin]) -> bytes:
+    """One row per basin and regression estimate. Empty if none."""
+    buf = io.StringIO()
+    writer = csv.writer(buf)
+    writer.writerow([
+        "id", "group", "code", "name", "value", "unit",
+        "regression_region", "errors_or_limits", "equation",
+    ])
+    wrote = False
+    for item in items:
+        for row in item.flow_statistics or []:
+            wrote = True
+            value = row.get("value")
+            writer.writerow([
+                item.id or "watershed",
+                row.get("group") or "",
+                row.get("code") or "",
+                row.get("name") or "",
+                "" if value is None else value,
+                row.get("unit") or "",
+                row.get("regression_region") or "",
+                row.get("errors_or_limits") or "",
+                row.get("equation") or "",
+            ])
+    if not wrote:
+        return b""
+    return buf.getvalue().encode("utf-8")
+
+
 def _zip_bytes(files: Dict[str, bytes]) -> bytes:
     buf = io.BytesIO()
     with zipfile.ZipFile(buf, "w", compression=zipfile.ZIP_DEFLATED) as zf:
@@ -279,6 +341,21 @@ def build_export(fmt: str, basins: List[ExportBasin]) -> tuple:
     files: Dict[str, bytes] = {}
     for item, stem in zip(usable, stems):
         files.update(_files_for(item, stem, fmt))
+
+    table = _characteristics_csv(usable)
+    flows = _flow_csv(usable)
+    extras: Dict[str, bytes] = {}
+    if table:
+        extras["basin_characteristics.csv"] = table
+    if flows:
+        extras["flow_statistics.csv"] = flows
+    # A lone geojson/kml/kmz becomes a zip once a table rides along,
+    # so the browser saves one download.
+    if extras and len(usable) == 1 and fmt != "shp":
+        files.update(extras)
+        stem = stems[0]
+        return f"{stem}_{fmt}.zip", "application/zip", _zip_bytes(files)
+    files.update(extras)
 
     if len(usable) == 1 and fmt != "shp":
         name, payload = next(iter(files.items()))

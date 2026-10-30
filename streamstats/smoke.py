@@ -37,7 +37,8 @@ def _fail(label: str, detail: str) -> None:
 
 def run() -> int:
     """Run OR snap + watershed checks. Return 0 on success."""
-    client = StreamStatsClient(timeout=90)
+    # Flow statistics is several NSS calls after delineation.
+    client = StreamStatsClient(timeout=180)
     failures = 0
 
     print(f"StreamStats smoke ({_REGION})")
@@ -84,6 +85,56 @@ def run() -> int:
                 f"{basin.get('geometry_type')} "
                 f"vertices={verts} area={basin.get('shape_area')}",
             )
+            chars = client.basin_characteristics(
+                basin.get("bcrequest") or {},
+                _REGION,
+            )
+            drnarea = next(
+                (
+                    row.get("value")
+                    for row in chars
+                    if str(row.get("code") or "").upper() == "DRNAREA"
+                ),
+                None,
+            )
+            if not isinstance(drnarea, (int, float)) or drnarea <= 0:
+                _fail(
+                    "basin characteristics",
+                    f"DRNAREA missing or not positive ({drnarea!r})",
+                )
+                failures += 1
+            else:
+                _pass(
+                    "basin characteristics",
+                    f"{len(chars)} rows, DRNAREA={drnarea} square miles",
+                )
+                flows = client.flow_statistics(
+                    basin.get("basin_geojson") or {},
+                    chars,
+                    _REGION,
+                )
+                positive = [
+                    row for row in flows
+                    if isinstance(row.get("value"), (int, float))
+                    and row["value"] > 0
+                ]
+                if not positive:
+                    _fail(
+                        "flow statistics",
+                        "no positive flow value",
+                    )
+                    failures += 1
+                else:
+                    sample = positive[0]
+                    warned = sum(
+                        1 for row in flows if row.get("errors_or_limits")
+                    )
+                    _pass(
+                        "flow statistics",
+                        f"{len(flows)} rows, "
+                        f"{sample.get('code')}={sample.get('value')} "
+                        f"{sample.get('unit')}, warnings={warned}",
+                    )
     except Exception as exc:
         _fail("watershed (on-network)", str(exc))
         failures += 1
