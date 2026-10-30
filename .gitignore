@@ -1,3 +1,7 @@
+# Frontend (Vite). Never commit installed packages or the build.
+web/node_modules/
+web/dist/
+
 # Python
 __pycache__/
 *.py[cod]
