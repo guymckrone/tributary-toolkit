@@ -11,6 +11,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from .sources import router as sources_router
 from .streamstats import router as streamstats_router
+from .streamstats_export import router as streamstats_export_router
 
 app = FastAPI(title="Tributary Toolkit")
 
@@ -33,6 +34,8 @@ app.add_middleware(
 )
 
 app.include_router(streamstats_router, prefix="/api/streamstats")
+# Shapefile / KML / KMZ. Separate module so snap stays small.
+app.include_router(streamstats_export_router, prefix="/api/streamstats")
 app.include_router(sources_router, prefix="/api/sources")
 
 

@@ -7,10 +7,18 @@
 
 import L from "leaflet";
 import "leaflet/dist/leaflet.css";
-import { apiPost, saveBlob, saveJson } from "./api.js";
+import { apiDownload, apiPost, saveBlob } from "./api.js";
 
 const DEFAULT_LAT = 45.3725;
 const DEFAULT_LON = -122.5858;
+
+// One control, used under a single basin and under a batch.
+const FORMAT_PICKER = `<select class="ss-fmt" aria-label="Download format">
+  <option value="geojson">GeoJSON</option>
+  <option value="shp">Shapefile</option>
+  <option value="kml">KML</option>
+  <option value="kmz">KMZ</option>
+</select>`;
 
 export function mountStreamStats(root) {
   root.innerHTML = `
@@ -171,8 +179,8 @@ export function mountStreamStats(root) {
         <tr><th>Shape_Area</th><td></td></tr>
         <tr><th>Warning</th><td></td></tr>
       </table>`);
-      bits.push(`<div class="actions"><button id="ss-geo" type="button">Download GeoJSON</button></div>`);
-      bits.push(`<p class="hint">Shape_Area is whatever SS-Delineate reports. Units not confirmed.</p>`);
+      bits.push(`<div class="actions">${FORMAT_PICKER}<button id="ss-geo" type="button">Download</button></div>`);
+      bits.push(`<p class="hint">Shape_Area is whatever SS-Delineate reports. Units not confirmed. A shapefile arrives as a zip of the .shp, .shx, .dbf, and .prj files.</p>`);
     }
     resultEl.innerHTML = bits.join("");
     const tables = resultEl.querySelectorAll("table");
@@ -197,7 +205,8 @@ export function mountStreamStats(root) {
     const geoBtn = resultEl.querySelector("#ss-geo");
     if (geoBtn && watershed) {
       geoBtn.addEventListener("click", () => {
-        saveJson(watershed.basin_geojson, "watershed.geojson");
+        const format = resultEl.querySelector(".ss-fmt").value;
+        downloadBasins([{ id: "watershed", watershed }], format).catch(showError);
       });
     }
   }
@@ -339,9 +348,11 @@ export function mountStreamStats(root) {
       ${results.map(() => `<tr><td></td><td></td><td></td><td></td></tr>`).join("")}
     </table>
     <div class="actions">
+      ${FORMAT_PICKER}
       <button id="ss-fc" type="button">Download basins</button>
       <button id="ss-rcsv" type="button">Download results CSV</button>
-    </div>`;
+    </div>
+    <p class="hint">More than one basin comes back as a zip of separate files. A browser will block a burst of individual downloads.</p>`;
     batchTable.innerHTML = head;
     // Row 0 is the header.
     results.forEach((row, i) => {
@@ -355,16 +366,12 @@ export function mountStreamStats(root) {
       tr.cells[3].textContent = row.error || "";
     });
     batchTable.querySelector("#ss-fc").addEventListener("click", () => {
-      const features = results
+      const format = batchTable.querySelector(".ss-fmt").value;
+      // Failed rows have no polygon. Leave them out.
+      const basins = results
         .filter((row) => row.ok && row.watershed && row.watershed.basin_geojson)
-        .map((row) => {
-          const feature = row.watershed.basin_geojson;
-          return {
-            ...feature,
-            properties: { ...(feature.properties || {}), id: row.id },
-          };
-        });
-      saveJson({ type: "FeatureCollection", features }, "watersheds.geojson");
+        .map((row) => ({ id: row.id, watershed: row.watershed }));
+      downloadBasins(basins, format).catch(showError);
     });
     batchTable.querySelector("#ss-rcsv").addEventListener("click", () => {
       const lines = ["id,request_lat,request_lon,snap_lat,snap_lon,snappable,vertices,area,error"];
@@ -392,6 +399,13 @@ export function mountStreamStats(root) {
   return () => {
     map.remove();
   };
+}
+
+/** Ask Python for the file. Several basins come back as one zip. */
+async function downloadBasins(basins, format) {
+  if (!basins.length) throw new Error("No watershed to download.");
+  const result = await apiDownload("/api/streamstats/export", { format, basins });
+  saveBlob(result.blob, result.filename);
 }
 
 function csvCell(value) {

@@ -1,0 +1,12 @@
+# Local web API (FastAPI). Install into the same conda env
+# that already has requests, pandas, and python-dotenv:
+#   pip install -r requirements-api.txt
+#
+# Run from data-downloader:
+#   uvicorn api.main:app --reload --host 127.0.0.1 --port 8000
+fastapi>=0.115
+uvicorn>=0.32
+python-multipart>=0.0.12
+# Shapefile writer. Pure Python, so it does not touch the
+# NumPy DLLs in this conda env.
+pyshp>=2.3
