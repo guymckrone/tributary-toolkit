@@ -1,8 +1,9 @@
 /**
  * StreamStats page.
  *
- * Map clicks only move the orange marker and the lat/lon boxes.
- * Snap and Delineate are the only calls to Python.
+ * A click moves the orange marker, unless "Pick multiple points"
+ * is on — then each click adds a numbered point and does not
+ * call USGS. Snap and Delineate are the calls to Python.
  */
 
 import L from "leaflet";
@@ -26,17 +27,10 @@ export function mountStreamStats(root) {
       <div class="stack">
         <section class="panel">
           <h2>Pour point</h2>
-          <p class="hint">Click the map or type a point. A click does not call USGS.</p>
-          <div class="row">
-            <div>
-              <label for="ss-lat">Latitude</label>
-              <input id="ss-lat" type="number" step="0.000001" value="${DEFAULT_LAT}" />
-            </div>
-            <div>
-              <label for="ss-lon">Longitude</label>
-              <input id="ss-lon" type="number" step="0.000001" value="${DEFAULT_LON}" />
-            </div>
-          </div>
+          <label class="check">
+            <input id="ss-multi" type="checkbox" />
+            Pick multiple points
+          </label>
           <label for="ss-region">Region (state code)</label>
           <input id="ss-region" type="text" value="OR" />
           <label class="check">
@@ -44,13 +38,34 @@ export function mountStreamStats(root) {
             Verify SSL
           </label>
           <p class="hint">Turn this off on the work network. It covers snap and delineate.</p>
-          <div class="actions">
-            <button id="ss-snap" type="button">Snap</button>
-            <button id="ss-delin" class="primary" type="button">Delineate watershed</button>
-          </div>
           <p id="ss-status" class="status"></p>
           <div id="ss-error"></div>
-          <div id="ss-result"></div>
+          <div id="ss-single">
+            <p class="hint">Click the map or type a point. A click does not call USGS.</p>
+            <div class="row">
+              <div>
+                <label for="ss-lat">Latitude</label>
+                <input id="ss-lat" type="number" step="0.000001" value="${DEFAULT_LAT}" />
+              </div>
+              <div>
+                <label for="ss-lon">Longitude</label>
+                <input id="ss-lon" type="number" step="0.000001" value="${DEFAULT_LON}" />
+              </div>
+            </div>
+            <div class="actions">
+              <button id="ss-snap" type="button">Snap</button>
+              <button id="ss-delin" class="primary" type="button">Delineate watershed</button>
+            </div>
+            <div id="ss-result"></div>
+          </div>
+          <div id="ss-multi-panel" hidden>
+            <p class="hint">Each click adds a point. Drag a number to move it. Deleting pt-1 makes the next new point pt-1 again. Cap 25. Several basins download as one zip, because a browser will block a burst of separate downloads.</p>
+            <div id="ss-picks" class="scroll"></div>
+            <div class="actions">
+              <button id="ss-pick-go" type="button">Delineate picked points</button>
+              <button id="ss-pick-clear" type="button">Clear all</button>
+            </div>
+          </div>
         </section>
         <section class="panel">
           <h2>Batch</h2>
@@ -126,6 +141,13 @@ export function mountStreamStats(root) {
 
   let lastBasin = null;
   let batchResults = [];
+  // Clicks while "Pick multiple points" is on.
+  let pickedPoints = [];
+  // True after a snap, so the blue dot can come back when I
+  // leave multi mode. Removing it for the mode switch is not
+  // the same as the user clearing it.
+  let snappedVisible = false;
+  const pickLayer = L.featureGroup().addTo(map);
 
   function pointFromInputs() {
     const latitude = toCoord(latInput.value);
@@ -213,7 +235,10 @@ export function mountStreamStats(root) {
 
   function placeSnap(snap) {
     snapped.setLatLng([snap.latitude, snap.longitude]);
-    if (!map.hasLayer(snapped)) snapped.addTo(map);
+    snappedVisible = true;
+    if (!root.querySelector("#ss-multi").checked && !map.hasLayer(snapped)) {
+      snapped.addTo(map);
+    }
     snapped.bringToFront();
   }
 
@@ -228,13 +253,134 @@ export function mountStreamStats(root) {
     if (map.hasLayer(snapped)) snapped.bringToFront();
   }
 
+  function nextPickId() {
+    // Lowest pt-N that is not already in the list. Deleting pt-1
+    // makes the next click pt-1 again. A renamed id does not hold a number.
+    const used = new Set();
+    for (const pt of pickedPoints) {
+      const match = /^pt-(\d+)$/.exec(pt.id);
+      if (match) used.add(Number(match[1]));
+    }
+    let n = 1;
+    while (used.has(n)) n += 1;
+    return `pt-${n}`;
+  }
+
+  function syncPickMode() {
+    const multi = root.querySelector("#ss-multi").checked;
+    root.querySelector("#ss-single").hidden = multi;
+    root.querySelector("#ss-multi-panel").hidden = !multi;
+    if (multi) {
+      if (map.hasLayer(selected)) selected.remove();
+      if (map.hasLayer(snapped)) snapped.remove();
+      if (map.hasLayer(basinLayer)) map.removeLayer(basinLayer);
+      drawPicks();
+      return;
+    }
+    pickLayer.clearLayers();
+    if (!map.hasLayer(selected)) selected.addTo(map);
+    if (!map.hasLayer(basinLayer)) basinLayer.addTo(map);
+    if (snappedVisible && !map.hasLayer(snapped)) snapped.addTo(map);
+    selected.bringToFront();
+  }
+
   map.on("click", (ev) => {
     const lat = Math.round(ev.latlng.lat * 1e6) / 1e6;
     const lon = Math.round(ev.latlng.lng * 1e6) / 1e6;
+    if (root.querySelector("#ss-multi").checked) {
+      if (pickedPoints.length >= 25) {
+        showError(new Error("25 points is the cap. Delineate these or remove one."));
+        return;
+      }
+      showError(null);
+      readPickIds();
+      pickedPoints.push({ id: nextPickId(), latitude: lat, longitude: lon });
+      drawPicks();
+      renderPicks();
+      return;
+    }
     latInput.value = String(lat);
     lonInput.value = String(lon);
     moveSelected(lat, lon);
   });
+
+  root.querySelector("#ss-multi").addEventListener("change", syncPickMode);
+
+  function drawPicks() {
+    pickLayer.clearLayers();
+    if (!root.querySelector("#ss-multi").checked) return;
+    pickedPoints.forEach((pt, i) => {
+      const num = /^pt-(\d+)$/.exec(pt.id);
+      const marker = L.marker([pt.latitude, pt.longitude], {
+        draggable: true,
+        icon: L.divIcon({
+          className: "leaflet-div-icon pick-num",
+          html: num ? num[1] : String(i + 1),
+          iconSize: [22, 22],
+          iconAnchor: [11, 11],
+        }),
+      });
+      marker.bindTooltip(pt.id);
+      // A drag should not also count as a new map click.
+      marker.on("click", (ev) => L.DomEvent.stopPropagation(ev));
+      marker.on("dragend", () => {
+        const ll = marker.getLatLng();
+        pt.latitude = Math.round(ll.lat * 1e6) / 1e6;
+        pt.longitude = Math.round(ll.lng * 1e6) / 1e6;
+        const tr = root.querySelectorAll("#ss-picks tr")[i + 1];
+        if (!tr) return;
+        tr.cells[2].textContent = pt.latitude.toFixed(5);
+        tr.cells[3].textContent = pt.longitude.toFixed(5);
+      });
+      marker.addTo(pickLayer);
+    });
+  }
+
+  function renderPicks() {
+    const box = root.querySelector("#ss-picks");
+    if (!pickedPoints.length) {
+      box.innerHTML = "";
+      return;
+    }
+    box.innerHTML = `<table>
+      <tr><th></th><th>Id</th><th>Lat</th><th>Lon</th><th></th></tr>
+      ${pickedPoints.map(() => `<tr><td></td><td><input class="pick-id" /></td><td></td><td></td><td><button type="button" class="pick-x">Remove</button></td></tr>`).join("")}
+    </table>`;
+    pickedPoints.forEach((pt, i) => {
+      const tr = box.querySelectorAll("tr")[i + 1];
+      const num = /^pt-(\d+)$/.exec(pt.id);
+      tr.cells[0].textContent = num ? num[1] : String(i + 1);
+      const input = tr.querySelector(".pick-id");
+      input.value = pt.id;
+      input.addEventListener("change", () => {
+        pt.id = input.value.trim() || pt.id;
+        input.value = pt.id;
+        drawPicks();
+      });
+      tr.cells[2].textContent = pt.latitude.toFixed(5);
+      tr.cells[3].textContent = pt.longitude.toFixed(5);
+      tr.querySelector(".pick-x").addEventListener("click", () => {
+        pickedPoints.splice(i, 1);
+        drawPicks();
+        renderPicks();
+      });
+    });
+  }
+
+  function readPickIds() {
+    root.querySelectorAll("#ss-picks .pick-id").forEach((input, i) => {
+      if (!pickedPoints[i]) return;
+      pickedPoints[i].id = input.value.trim() || pickedPoints[i].id;
+    });
+  }
+
+  root.querySelector("#ss-pick-clear").addEventListener("click", () => {
+    pickedPoints = [];
+    drawPicks();
+    renderPicks();
+  });
+
+  syncPickMode();
 
   function onTyped() {
     const lat = toCoord(latInput.value);
@@ -286,6 +432,54 @@ export function mountStreamStats(root) {
     });
   });
 
+  // CSV rows and map picks both end here. One request per point:
+  // a bad point only fails its own row, and finished basins stay.
+  async function delineateMany(points) {
+    if (!points.length) throw new Error("No points to delineate.");
+    if (points.length > 25) {
+      throw new Error(`${points.length} points is over the 25-point cap. Split them up.`);
+    }
+    if (points.length > 10) {
+      batchNote.innerHTML += `<p class="warn">${points.length} points. Each delineation can take most of a minute.</p>`;
+    }
+    const results = [];
+    for (const [i, point] of points.entries()) {
+      statusEl.textContent = `Delineating ${i + 1} of ${points.length}…`;
+      const id = point.id || `row-${i + 1}`;
+      try {
+        const watershed = await apiPost(
+          "/api/streamstats/watershed",
+          {
+            latitude: point.latitude,
+            longitude: point.longitude,
+            region: regionInput.value,
+            verify_ssl: sslInput.checked,
+          },
+          150000,
+        );
+        results.push({ id, ok: true, error: "", watershed });
+      } catch (err) {
+        results.push({ id, ok: false, error: err.message || String(err), watershed: null });
+      }
+    }
+    statusEl.textContent = "";
+    return results;
+  }
+
+  function finishBatch(results) {
+    batchResults = results;
+    drawBatch(batchResults);
+    renderBatch(batchResults);
+  }
+
+  root.querySelector("#ss-pick-go").addEventListener("click", (ev) => {
+    withBusy(ev.currentTarget, "Delineating…", async () => {
+      readPickIds();
+      batchNote.innerHTML = "";
+      finishBatch(await delineateMany(pickedPoints.map((pt) => ({ ...pt }))));
+    });
+  });
+
   root.querySelector("#ss-batch").addEventListener("click", (ev) => {
     withBusy(ev.currentTarget, "Delineating…", async () => {
       const file = root.querySelector("#ss-csv").files[0];
@@ -296,38 +490,7 @@ export function mountStreamStats(root) {
         batchNote.innerHTML += `<p class="warn">Skipped ${parsed.skipped.length} row(s): ${parsed.skipped.join("; ")}</p>`;
       }
       if (!parsed.points.length) throw new Error("No usable lat/lon rows in that file.");
-      if (parsed.points.length > 25) {
-        throw new Error(`${parsed.points.length} points is over the 25-point cap. Split the file.`);
-      }
-      if (parsed.points.length > 10) {
-        batchNote.innerHTML += `<p class="warn">${parsed.points.length} points. Each delineation can take most of a minute.</p>`;
-      }
-      // One request per point: each gets its own timeout, a bad
-      // point only fails its own row, and finished basins survive.
-      const results = [];
-      for (const [i, point] of parsed.points.entries()) {
-        statusEl.textContent = `Delineating ${i + 1} of ${parsed.points.length}…`;
-        const id = point.id || `row-${i + 1}`;
-        try {
-          const watershed = await apiPost(
-            "/api/streamstats/watershed",
-            {
-              latitude: point.latitude,
-              longitude: point.longitude,
-              region: regionInput.value,
-              verify_ssl: sslInput.checked,
-            },
-            150000,
-          );
-          results.push({ id, ok: true, error: "", watershed });
-        } catch (err) {
-          results.push({ id, ok: false, error: err.message || String(err), watershed: null });
-        }
-      }
-      statusEl.textContent = "";
-      batchResults = results;
-      drawBatch(batchResults);
-      renderBatch(batchResults);
+      finishBatch(await delineateMany(parsed.points));
     });
   });
 
@@ -340,6 +503,7 @@ export function mountStreamStats(root) {
     }
     const bounds = batchLayer.getBounds();
     if (bounds.isValid()) map.fitBounds(bounds, { padding: [24, 24] });
+    pickLayer.bringToFront();
   }
 
   function renderBatch(results) {

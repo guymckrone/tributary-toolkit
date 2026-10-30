@@ -121,6 +121,17 @@ th, td {
 tr.selected { background: #e7f0ff; }
 tr.clickable { cursor: pointer; }
 
+.leaflet-div-icon.pick-num {
+  background: #6b3fa0;
+  color: #fff;
+  border: 2px solid #fff;
+  border-radius: 50%;
+  font: 700 12px/18px "Segoe UI", sans-serif;
+  text-align: center;
+  cursor: grab;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.35);
+}
+
 .check { display: flex; align-items: center; gap: 8px; margin-top: 8px; }
 .check input { width: auto; }
 
