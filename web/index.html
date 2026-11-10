@@ -11,10 +11,17 @@
         <h1>Tributary Toolkit</h1>
         <p class="tag">Local tools. The map stays in the browser.</p>
       </div>
-      <nav>
-        <a href="#streamstats" data-page="streamstats">StreamStats</a>
-        <a href="#download" data-page="download">Data Download</a>
-      </nav>
+      <div class="top-tools">
+        <label class="sync-view" title="On: the next tab opens where this map is. Off: each tab keeps its own place.">
+          <input id="sync-view" type="checkbox" checked />
+          Same view on every tab
+        </label>
+        <nav>
+          <a href="#streamstats" data-page="streamstats">StreamStats</a>
+          <a href="#download" data-page="download">Data Download</a>
+          <a href="#dem" data-page="dem">DEM</a>
+        </nav>
+      </div>
     </header>
     <main id="page"></main>
     <script type="module" src="/src/main.js"></script>

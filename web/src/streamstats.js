@@ -9,6 +9,7 @@
 import L from "leaflet";
 import "leaflet/dist/leaflet.css";
 import { apiDownload, apiPost, saveBlob } from "./api.js";
+import { initialView, watchMap } from "./mapview.js";
 
 const DEFAULT_LAT = 45.3725;
 const DEFAULT_LON = -122.5858;
@@ -115,7 +116,8 @@ export function mountStreamStats(root) {
   const batchNote = root.querySelector("#ss-batch-note");
   const batchTable = root.querySelector("#ss-batch-table");
 
-  const map = L.map(root.querySelector("#ss-map")).setView([DEFAULT_LAT, DEFAULT_LON], 12);
+  const start = initialView("streamstats", { lat: DEFAULT_LAT, lng: DEFAULT_LON, zoom: 12 });
+  const map = L.map(root.querySelector("#ss-map")).setView([start.lat, start.lng], start.zoom);
   const streets = L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
     attribution: "&copy; OpenStreetMap",
     maxZoom: 18,
@@ -739,9 +741,9 @@ export function mountStreamStats(root) {
     });
   }
 
-  setTimeout(() => map.invalidateSize(), 0);
-
+  const stopWatch = watchMap(map, "streamstats");
   return () => {
+    stopWatch();
     map.remove();
   };
 }

@@ -12,6 +12,7 @@ import "leaflet.markercluster";
 import "leaflet.markercluster/dist/MarkerCluster.css";
 import "leaflet.markercluster/dist/MarkerCluster.Default.css";
 import { apiDownload, apiForm, apiGet, apiPost, saveBlob } from "./api.js";
+import { initialView, watchMap } from "./mapview.js";
 
 const COLORS = {
   USGS: "#1f77b4",
@@ -137,7 +138,8 @@ export function mountDownload(root) {
   root.querySelector("#dl-start").value = isoDate(yearAgo);
   root.querySelector("#dl-end").value = isoDate(today);
 
-  const map = L.map(root.querySelector("#dl-map")).setView([44.0, -120.5], 6);
+  const start = initialView("download", { lat: 44.0, lng: -120.5, zoom: 6 });
+  const map = L.map(root.querySelector("#dl-map")).setView([start.lat, start.lng], start.zoom);
   L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
     attribution: "&copy; OpenStreetMap",
     maxZoom: 18,
@@ -510,8 +512,11 @@ export function mountDownload(root) {
     showError(new Error(`${err.message} — is uvicorn running on port 8000?`));
   });
 
-  setTimeout(() => map.invalidateSize(), 0);
-  return () => map.remove();
+  const stopWatch = watchMap(map, "download");
+  return () => {
+    stopWatch();
+    map.remove();
+  };
 }
 
 function isoDate(d) {

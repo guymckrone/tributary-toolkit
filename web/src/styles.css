@@ -32,6 +32,16 @@ body {
 .top h1 { margin: 0; font-size: 20px; }
 .tag { margin: 2px 0 0; color: #b7c4d4; font-size: 13px; }
 
+.top-tools { display: flex; align-items: center; gap: 16px; }
+.sync-view {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  color: #fff;
+  font-size: 13px;
+}
+.sync-view input { width: auto; }
+
 nav { display: flex; gap: 8px; }
 nav a {
   color: #fff;
