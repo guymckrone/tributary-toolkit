@@ -17,6 +17,7 @@ venv/
 # Local project notes (not for the remote)
 HANDOFF.md
 REQUIREMENTS_SPEC.md
+plans/
 
 # IDEs
 .vscode/
@@ -32,3 +33,7 @@ Thumbs.db
 # Keep the README; ignore the multi-GB binaries and extracts.
 streamstats/data/nhdplus_v2/**
 !streamstats/data/nhdplus_v2/README.md
+
+# DEM GeoTIFFs from get_dem(). Keep the README.
+dem/data/cache/**
+!dem/data/cache/README.md
