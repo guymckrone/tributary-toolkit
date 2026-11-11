@@ -51,6 +51,70 @@ export async function apiDownload(path, body) {
   };
 }
 
+// Text X-Dem-* values are percent-encoded, same as X-Partial-Errors.
+const DEM_HEADERS = [
+  ["provider", "X-Dem-Provider"],
+  ["requestedResolution", "X-Dem-Requested-Resolution"],
+  ["sourceResolution", "X-Dem-Source-Resolution"],
+  ["coarsestResolution", "X-Dem-Coarsest-Resolution"],
+  ["epsg", "X-Dem-Epsg"],
+  ["bboxProjected", "X-Dem-Bbox-Projected"],
+  ["verticalUnit", "X-Dem-Vertical-Unit"],
+  ["fromCache", "X-Dem-From-Cache"],
+  ["collectionKey", "X-Dem-Collection-Key"],
+  ["collectionName", "X-Dem-Collection-Name"],
+  ["collectionPeriod", "X-Dem-Collection-Period"],
+  ["fillKey", "X-Dem-Fill-Key"],
+  ["fillName", "X-Dem-Fill-Name"],
+  ["fillPeriod", "X-Dem-Fill-Period"],
+  ["fillUsed", "X-Dem-Fill-Used"],
+  ["nodata", "X-Dem-Nodata"],
+  ["clipName", "X-Dem-Clip-Name"],
+  ["description", "X-Dem-Description"],
+];
+
+function headerText(res, name) {
+  const raw = res.headers.get(name);
+  if (!raw) return "";
+  try {
+    return decodeURIComponent(raw);
+  } catch {
+    return raw;
+  }
+}
+
+/** GeoTIFF download. Returns { blob, filename, dem }. dem is the decoded X-Dem-* headers. */
+export async function apiDemDownload(path, body) {
+  const res = await fetch(path, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+    signal: AbortSignal.timeout(10 * 60 * 1000),
+  });
+  if (!res.ok) {
+    let detail = res.statusText;
+    try {
+      const data = await res.json();
+      detail = data.detail || detail;
+    } catch {
+      /* body was not JSON */
+    }
+    throw new Error(typeof detail === "string" ? detail : JSON.stringify(detail));
+  }
+  const blob = await res.blob();
+  const disposition = res.headers.get("Content-Disposition") || "";
+  const match = disposition.match(/filename="([^"]+)"/);
+  const dem = {};
+  for (const [key, name] of DEM_HEADERS) {
+    dem[key] = headerText(res, name);
+  }
+  return {
+    blob,
+    filename: match ? match[1] : "dem.tif",
+    dem,
+  };
+}
+
 async function readJson(res) {
   let data = null;
   try {
