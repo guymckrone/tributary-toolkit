@@ -14,9 +14,11 @@ from .composite import NODATA, describe_lock, punch_outside_file
 from .models import DemEstimate, DemRequest, DemResult
 from .registry import create_provider, list_providers
 
-# Uncompressed Float32. Chosen to sit just under one max-size
-# ImageServer request (8000 x 8000 px is 256 MB). Raise it
-# per call when a bigger box is deliberate.
+# Uncompressed Float32 for the whole result, not one request.
+# It started as just under one 8000 x 8000 px request (256 MB).
+# A request is now at most 2048 px a side, so a box at the cap
+# is about sixteen requests. Raise it per call when a bigger
+# box is deliberate.
 DEFAULT_MAX_MB = 250
 
 

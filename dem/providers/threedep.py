@@ -1,7 +1,7 @@
 """USGS 3DEP bare-earth DEM via the public ImageServer.
 
 The server clips and reprojects, so this file only needs requests.
-A grid longer than 8000 pixels on a side is several of those
+A grid longer than MAX_PIXELS (2048) on a side is several of those
 requests, sliced from the same snapped grid and stitched back.
 
 Asking for 1 m pixels does not mean the source is 1 m lidar.
@@ -40,9 +40,16 @@ from ..collections import build_catalog
 from ..models import BBox, DemCatalog, DemEstimate, DemRequest, DemResult
 
 
-# Read from the service's own ?f=json on Nov 6, 2026.
-# 8000 x 8000 float32 is 256 MB. Tiling comes later.
-MAX_PIXELS = 8000
+# Pixels per side of one exportImage request.
+# The service says 8000 x 8000 (its own ?f=json, Nov 6, 2026), but
+# on Nov 10 a locked 1 m export of OR_PortlandMetro_B24 at Johnson
+# Creek came back HTTP 500 "Error exporting image" at 3923 x 3417
+# and 4137 x 3555. 3623 x 3217 and a 7919 x 1441 strip passed.
+# Looks like a total-pixel limit near 12 to 13 million, not a side
+# limit, and the timing was noisy. Another project reports 500s
+# from 3000 px a side and settled on 2048. I use 2048, so one
+# request is at most about 4.2 million pixels.
+MAX_PIXELS = 2048
 
 BASE_URL = (
     "https://elevation.nationalmap.gov/arcgis/rest/services/"
@@ -150,7 +157,7 @@ def pixel_grid(
 ) -> PixelGrid:
     """Project and snap outward. A long side is fine.
 
-    The 8000 pixel server limit is applied later, by splitting
+    The per-request pixel limit (MAX_PIXELS) is applied later, by splitting
     this grid. Refusing here would make a river reach at 1 m
     impossible to even estimate.
     """

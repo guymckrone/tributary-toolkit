@@ -270,7 +270,8 @@ def _tiled_matches_one_request(provider, johnson, reference: Path, cache_dir) ->
 
     max_pixels is lowered so the Johnson Creek 1 m grid, a couple
     of hundred pixels on a side, has to be more than one request.
-    The real server limit stays 8000. This only forces the split.
+    The real per-request limit is MAX_PIXELS (2048). This only
+    forces a split on a box that would otherwise be one request.
     """
     label = "tiled download matches one request"
     try:

@@ -1,7 +1,9 @@
 """Split one snapped grid into requests the ImageServer will accept.
 
-The server refuses a side longer than 8000 pixels. The pieces are
-slices of the same pixel grid, so they share the collection, the
+The server says 8000 pixels a side, but it returns HTTP 500 well
+before that (see MAX_PIXELS in providers/threedep.py), so the
+provider asks for pieces of at most that many pixels on a side.
+The pieces are slices of the same pixel grid, so they share the collection, the
 pixel size, and the edges. A one-pixel halo is requested around
 each piece and thrown away. Bilinear interpolation at a raw edge
 uses neighbors the next piece does not have. The halo gives every
