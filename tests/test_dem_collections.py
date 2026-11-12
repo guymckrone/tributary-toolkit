@@ -53,6 +53,16 @@ class GroupTests(unittest.TestCase):
         self.assertEqual(only.footprint["type"], "MultiPolygon")
         self.assertEqual(len(only.footprint["coordinates"]), 2)
 
+    def test_zero_cover_rows_are_hidden(self):
+        # Touches the box's west edge by about 1 m. The samples miss it.
+        sliver = _ring(-122.7, 45.3, -122.6 + 0.00001, 45.4)
+        features = [
+            _feature("OR_Example_2020", 1, _ring(-122.6, 45.3, -122.5, 45.4)),
+            _feature("OR_SliverOnly", 1, sliver),
+        ]
+        catalog = build_catalog(BOX, features)
+        self.assertEqual([item.name for item in catalog.collections], ["OR_Example_2020"])
+
     def test_national_resolutions_stay_separate(self):
         big = _ring(-123.0, 45.0, -122.0, 46.0)
         features = [
@@ -102,6 +112,57 @@ class GroupTests(unittest.TestCase):
         self.assertEqual(only.year, 2014)
         self.assertEqual(only.start_text, "2009")
         self.assertEqual(only.end_text, "2014")
+
+
+class NedSurveyTests(unittest.TestCase):
+    # Two side-by-side blocks that together cover BOX.
+    WEST = _ring(-122.75, 45.25, -122.5, 45.5)
+    EAST = _ring(-122.5, 45.25, -122.25, 45.5)
+
+    def test_blocks_of_one_survey_share_a_row(self):
+        features = [
+            _feature("ned19_n45x50_w122x75_or_portland_2007", 3.44, self.WEST,
+                     start=2009, end=2014),
+            _feature("ned19_n45x50_w122x25_or_portland_2007", 3.44, self.EAST,
+                     start=2009, end=2014),
+        ]
+        catalog = build_catalog(BOX, features)
+        self.assertEqual(len(catalog.collections), 1)
+        only = catalog.collections[0]
+        self.assertEqual(only.name, "ned19_or_portland_2007")
+        self.assertEqual(only.tile_count, 2)
+        self.assertEqual(
+            set(only.tile_names),
+            {
+                "ned19_n45x50_w122x75_or_portland_2007",
+                "ned19_n45x50_w122x25_or_portland_2007",
+            },
+        )
+        self.assertTrue(only.covers_all)
+
+    def test_blocks_with_different_dates_stay_apart(self):
+        features = [
+            _feature("ned19_n45x50_w122x75_or_portland_2007", 3.44, self.WEST,
+                     start=2009, end=2014),
+            _feature("ned19_n45x50_w122x25_or_portland_2007", 3.44, self.EAST,
+                     start=2005, end=2006),
+        ]
+        catalog = build_catalog(BOX, features)
+        self.assertEqual(len(catalog.collections), 2)
+        self.assertEqual(
+            {item.name for item in catalog.collections},
+            {"ned19_or_portland_2007"},
+        )
+        self.assertEqual({item.tile_count for item in catalog.collections}, {1})
+
+    def test_names_that_only_look_like_ned_are_unchanged(self):
+        features = [
+            _feature("ned19_portland_2007", 3.44, self.WEST),
+            _feature("OR_Example_2020", 1, self.EAST),
+        ]
+        catalog = build_catalog(BOX, features)
+        names = {item.name for item in catalog.collections}
+        self.assertEqual(names, {"ned19_portland_2007", "OR_Example_2020"})
 
 
 class SuggestTests(unittest.TestCase):

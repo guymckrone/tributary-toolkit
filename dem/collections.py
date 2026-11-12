@@ -17,6 +17,11 @@ from .models import DemCatalog, DemCollection
 # n46w123, n45w122. The 1-degree national tiles.
 _NATIONAL_NAME = re.compile(r"^n\d{2}w\d{3}$")
 
+# ned19_n45x50_w122x75_or_portland_2007: one 7.5 minute block of a
+# NED survey. The block part sits in the middle of the name, so the
+# survey name is the two ends joined back together.
+_NED_BLOCK_NAME = re.compile(r"^(ned\d+)_n\d+x\d+_w\d+x\d+_(.+)$")
+
 # A sample on the boundary can fall outside by a fraction of a
 # meter. 99.5% still means the dataset covers the box.
 _COVERS_ALL_PCT = 99.5
@@ -89,6 +94,19 @@ def _group_key(name: str, resolution_m: float) -> Tuple[str, str]:
     if _NATIONAL_NAME.match(name):
         return ("national", f"{resolution_m:.2f}")
     return ("project", f"{name}|{resolution_m:.2f}")
+
+
+def _survey_name(name: str) -> Optional[str]:
+    """The survey a NED block belongs to, or None for any other name.
+
+    ned19_n45x50_w122x75_or_portland_2007 -> ned19_or_portland_2007
+    Anything that does not match the block pattern returns None, so
+    its grouping stays exactly as it was.
+    """
+    match = _NED_BLOCK_NAME.match(name)
+    if not match:
+        return None
+    return f"{match.group(1)}_{match.group(2)}"
 
 
 def _display_name(kind: str, name: str, resolution_m: float) -> str:
@@ -246,13 +264,30 @@ def build_catalog(bbox, features: Sequence[dict]) -> DemCatalog:
         except (TypeError, ValueError):
             continue
         kind, key_tail = _group_key(name, resolution_m)
+        survey = _survey_name(name)
+        if survey:
+            # Blocks of one survey share a row. The signature keeps
+            # two different surveys with the same name apart: any
+            # block whose dates, datum, or DEM type disagree gets
+            # its own row, same as before.
+            signature = "|".join(
+                str(attrs.get(field) or "")
+                for field in (
+                    "StartDate", "EndDate", "AcquisitionDate",
+                    "VerticalDatum", "DEM_Type",
+                )
+            )
+            kind = "project"
+            key_tail = f"{survey}|{resolution_m:.2f}|{signature}"
         key = f"{kind}:{key_tail}"
         bucket = groups.get(key)
         if bucket is None:
             bucket = {
                 "key": key,
                 "kind": kind,
-                "name": name,
+                # The row shows the survey name. Tile names stay the
+                # block names, because the download needs them.
+                "name": survey or name,
                 "resolution_m": resolution_m,
                 "tiles": [],
                 "rings": [],
@@ -306,6 +341,11 @@ def build_catalog(bbox, features: Sequence[dict]) -> DemCatalog:
             pct = 100.0 * hits / len(samples)
         else:
             pct = 0.0
+        if pct <= 0:
+            # The catalog returns anything that touches the box, even by
+            # a sliver the sample grid cannot see. Nothing usable there,
+            # so the row does not go in the picker or the fill list.
+            continue
         start_value = min(bucket["starts"], key=_date_rank) if bucket["starts"] else None
         end_value = max(bucket["ends"], key=_date_rank) if bucket["ends"] else None
         end_parsed = _parse_date(end_value)
