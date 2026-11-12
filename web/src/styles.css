@@ -96,6 +96,11 @@ button:disabled { opacity: 0.6; cursor: wait; }
 .actions select { width: auto; }
 
 .hint, .status { color: var(--muted); font-size: 13px; margin: 6px 0; }
+/* The DEM summary ends in a file name, which has no spaces to wrap on.
+   Let the browser break inside it so it stays inside the sidebar. */
+#dem-status { overflow-wrap: anywhere; }
+/* Dataset names have no spaces, so they need the same rule inside the table. */
+.dataset-name { overflow-wrap: anywhere; }
 .error {
   background: #fde8e8;
   color: var(--danger);

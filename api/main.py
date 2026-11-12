@@ -9,6 +9,8 @@ The Vite dev server (web/) proxies /api to this process.
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
+from .dem import DEM_RESPONSE_HEADERS
+from .dem import router as dem_router
 from .sources import router as sources_router
 from .streamstats import router as streamstats_router
 from .streamstats_export import router as streamstats_export_router
@@ -30,6 +32,10 @@ app.add_middleware(
         "X-Series-Count",
         "X-Partial-Errors",
         "Content-Disposition",
+        # The DEM page reads these off the GeoTIFF response.
+        # Same reason as X-Point-Count: a different port hides
+        # them unless they are listed here.
+        *DEM_RESPONSE_HEADERS,
     ],
 )
 
@@ -37,6 +43,7 @@ app.include_router(streamstats_router, prefix="/api/streamstats")
 # Shapefile / KML / KMZ. Separate module so snap stays small.
 app.include_router(streamstats_export_router, prefix="/api/streamstats")
 app.include_router(sources_router, prefix="/api/sources")
+app.include_router(dem_router, prefix="/api/dem")
 
 
 @app.get("/api/health")

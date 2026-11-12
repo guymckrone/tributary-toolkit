@@ -71,6 +71,7 @@ const DEM_HEADERS = [
   ["nodata", "X-Dem-Nodata"],
   ["clipName", "X-Dem-Clip-Name"],
   ["description", "X-Dem-Description"],
+  ["zeroWarning", "X-Dem-Zero-Warning"],
 ];
 
 function headerText(res, name) {

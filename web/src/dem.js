@@ -76,7 +76,13 @@ export function mountDem(root) {
     collections: [],
     collectionKey: null,
     estimate: null,
+    // Goes up whenever the box or a selection changes. A slow request
+    // remembers the number it started with and drops its answer if the
+    // number has moved on, so an old answer cannot overwrite a new choice.
+    generation: 0,
   };
+
+  const STALE_MESSAGE = "That answer was for an earlier box or selection, so I dropped it. Run the step again.";
   const providerSelect = root.querySelector("#dem-provider");
   const descEl = root.querySelector("#dem-desc");
   const sslInput = root.querySelector("#dem-ssl");
@@ -123,6 +129,7 @@ export function mountDem(root) {
   // leave the button stuck.
   async function withBusy(button, label, fn) {
     showError(null);
+    statusEl.className = "status";
     button.disabled = true;
     const previous = button.textContent;
     button.textContent = label;
@@ -130,6 +137,7 @@ export function mountDem(root) {
       await fn();
     } catch (err) {
       showError(err);
+      statusEl.className = "status";
       statusEl.textContent = "";
     } finally {
       button.disabled = false;
@@ -215,6 +223,9 @@ export function mountDem(root) {
   }
 
   function clearEstimate() {
+    // Every change that clears the estimate also means an old answer
+    // is stale. showBox and clearDatasets call this, so they count too.
+    state.generation += 1;
     state.estimate = null;
     estimateEl.className = "hint";
     estimateEl.textContent = "";
@@ -257,16 +268,34 @@ export function mountDem(root) {
     };
   }
 
-  function downloadSummary(file) {
+  // One short line per fact. The full description and the nodata
+  // value go in the hover tooltip, so the summary stays readable.
+  function addSummaryLine(text, cls) {
+    const line = document.createElement("div");
+    if (cls) line.className = cls;
+    line.textContent = text;
+    statusEl.appendChild(line);
+  }
+
+  function renderSummary(file) {
     const info = file.dem;
-    const cache = info.fromCache === "true" ? "From cache." : "Downloaded.";
     const name = info.collectionName || info.provider || "DEM";
     const period = info.collectionPeriod ? ` (${info.collectionPeriod})` : "";
-    const fill = info.fillUsed === "true" && info.fillName
-      ? ` Fill ${info.fillName}${info.fillPeriod ? ` (${info.fillPeriod})` : ""}.`
+    const source = info.sourceResolution && info.sourceResolution !== info.requestedResolution
+      ? ` from ${info.sourceResolution} m source`
       : "";
-    const clip = info.clipName ? ` Clip ${info.clipName}.` : "";
-    return `${name}${period}. ${info.requestedResolution} m requested, ${info.sourceResolution} m source. EPSG ${info.epsg}. ${info.verticalUnit}. Nodata ${info.nodata}. ${cache}${fill}${clip} ${info.description} → ${file.filename}`;
+    // The clip name is the file name. Drop the extension for the summary.
+    const clip = info.clipName ? `Clipped to ${info.clipName.replace(/\.[^.]+$/, "")}` : "Full rectangle";
+    const fill = info.fillUsed === "true" && info.fillName ? `fill ${info.fillName}` : "no fill";
+    const cache = info.fromCache === "true" ? "from cache" : "downloaded";
+
+    statusEl.className = "status";
+    statusEl.textContent = "";
+    statusEl.title = `${info.description}\nNodata ${info.nodata}`;
+    addSummaryLine(`${name}${period} · ${info.requestedResolution} m${source} · EPSG ${info.epsg} · heights in ${info.verticalUnit}`);
+    addSummaryLine(`${clip} · ${fill} · ${cache}`);
+    if (info.zeroWarning) addSummaryLine(info.zeroWarning, "warn");
+    addSummaryLine(file.filename);
   }
 
   function renderFill() {
@@ -324,16 +353,23 @@ export function mountDem(root) {
         });
         pick.appendChild(radio);
         tr.appendChild(pick);
-        for (const text of [
+        const cells = [
           item.name,
           item.period_label,
           meters(item.resolution_m),
           pct(item.coverage_pct),
-        ]) {
+        ];
+        cells.forEach((text, index) => {
           const td = document.createElement("td");
           td.textContent = text || "";
+          // The dataset name is the only long word in the row. The
+          // class lets it wrap, and the tooltip shows the full name.
+          if (index === 0) {
+            td.className = "dataset-name";
+            td.title = item.name;
+          }
           tr.appendChild(td);
-        }
+        });
         table.appendChild(tr);
       }
       collectionsEl.appendChild(table);
@@ -387,7 +423,12 @@ export function mountDem(root) {
       if (!file) throw new Error("Choose a shapefile zip, GeoJSON, KML, or KMZ first.");
       const form = new FormData();
       form.append("file", file);
+      const generation = state.generation;
       const data = await apiForm("/api/dem/boundary", form);
+      if (generation !== state.generation) {
+        statusEl.textContent = STALE_MESSAGE;
+        return;
+      }
       state.drawing = false;
       state.corner = null;
       clearOutline();
@@ -410,7 +451,12 @@ export function mountDem(root) {
       if (!state.bbox) throw new Error("Draw a box or use an outline first.");
       if (!state.collectionKey) throw new Error("List datasets and pick one.");
       statusEl.textContent = "Estimating the rectangle. Nothing is downloaded.";
+      const generation = state.generation;
       const data = await apiPost("/api/dem/estimate", demBody(), 300000);
+      if (generation !== state.generation) {
+        statusEl.textContent = STALE_MESSAGE;
+        return;
+      }
       showEstimate(data);
       statusEl.textContent = "";
     });
@@ -428,7 +474,7 @@ export function mountDem(root) {
       }
       const file = await apiDemDownload("/api/dem/download", body);
       saveBlob(file.blob, file.filename);
-      statusEl.textContent = downloadSummary(file);
+      renderSummary(file);
     });
   });
 
@@ -454,11 +500,16 @@ export function mountDem(root) {
     withBusy(ev.currentTarget, "Listing…", async () => {
       if (!state.bbox) throw new Error("Draw a box or use an outline first.");
       statusEl.textContent = "Asking 3DEP what overlaps this box…";
+      const generation = state.generation;
       const data = await apiPost("/api/dem/collections", {
         bbox: state.bbox,
         provider: providerSelect.value || "3dep",
         verify_ssl: readVerifySsl(),
       }, 300000);
+      if (generation !== state.generation) {
+        statusEl.textContent = STALE_MESSAGE;
+        return;
+      }
       const wasShowing = Boolean(coverageLayer);
       state.collections = data.collections || [];
       const suggested = data.suggested_key || "";
