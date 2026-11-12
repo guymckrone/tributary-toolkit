@@ -4,12 +4,16 @@ Run from data-downloader:
     python -m unittest tests.test_dem_service
 """
 
+import json
 import tempfile
 import unittest
 from pathlib import Path
 
+import numpy as np
+
 from dem.aoi import estimate_mb
 from dem.cache import cache_key, clear_cache, lookup
+from dem.composite import write_grid_tiff
 from dem.models import (
     DemCatalog,
     DemCollection,
@@ -205,6 +209,8 @@ class _LockProvider(_FakeProvider):
             fill_period=None if fill is None else fill.period_label(),
             fill_used=fill is not None,
             nodata=-999999.0,
+            zero_warning=getattr(self, "zero_warning", None),
+            zero_warning_known=True,
         )
 
 
@@ -242,6 +248,34 @@ class LockedGetDemTests(unittest.TestCase):
         self.assertEqual(first.requested_resolution_m, 1.0)
         self.assertEqual(fake.fetches, 1)
         self.assertEqual(fake.locked_fills, [None])
+        self.assertIsNone(second.zero_warning)
+
+    def test_zero_warning_survives_the_cache(self):
+        fake, primary, _fill = self._provider()
+        fake.zero_warning = (
+            "Warning: every cell inside this flight is 0. "
+            "3DEP has no elevation here."
+        )
+        request = DemRequest(
+            bbox=(-122.6, 45.3, -122.5, 45.4),
+            resolution_m="best",
+        )
+        with tempfile.TemporaryDirectory() as folder:
+            first = get_dem(
+                request,
+                provider=fake,
+                cache_dir=folder,
+                collection_key=primary.key,
+            )
+            second = get_dem(
+                request,
+                provider=fake,
+                cache_dir=folder,
+                collection_key=primary.key,
+            )
+        self.assertEqual(first.zero_warning, fake.zero_warning)
+        self.assertEqual(second.zero_warning, fake.zero_warning)
+        self.assertEqual(fake.fetches, 1)
 
     def test_full_primary_records_the_fill_but_does_not_download_it(self):
         fake, primary, fill = self._provider(primary_covers=True)
@@ -362,6 +396,51 @@ class LockedGetDemTests(unittest.TestCase):
         self.assertIsNone(found.collection_key)
         self.assertFalse(found.fill_used)
         self.assertIsNone(found.nodata)
+
+    def test_old_locked_tiff_is_measured_for_zeros(self):
+        # Sidecar from before the check: no zero_warning key.
+        # The TIFF is a flat sheet of 0, so the next read says so
+        # without calling the provider.
+        request = DemRequest(
+            bbox=(-122.6, 45.3, -122.5, 45.4),
+            resolution_m=1,
+        )
+        collection_key = "project:lidar|1.00"
+        with tempfile.TemporaryDirectory() as folder:
+            directory = Path(folder)
+            key = cache_key(request, collection_key)
+            write_grid_tiff(
+                np.zeros((2, 2), dtype=np.float32),
+                directory / f"{key}.tif",
+                epsg=26910,
+                xmin=100.0,
+                ymax=200.0,
+                resolution_m=1.0,
+                nodata=-999999.0,
+            )
+            payload = {
+                "provider": "3dep",
+                "requested_resolution_m": 1.0,
+                "source_resolution_m": 1.0,
+                "coarsest_resolution_m": 1.0,
+                "epsg": 26910,
+                "bbox_projected": [100.0, 198.0, 102.0, 200.0],
+                "vertical_unit": "m",
+                "source_description": "old lock",
+                "collection_key": collection_key,
+                "collection_name": "lidar",
+                "nodata": -999999.0,
+            }
+            (directory / f"{key}.json").write_text(
+                json.dumps(payload), encoding="utf-8"
+            )
+            found = get_dem(
+                request,
+                cache_dir=directory,
+                collection_key=collection_key,
+            )
+        self.assertTrue(found.from_cache)
+        self.assertIn("every cell inside", found.zero_warning)
 
 
 class GetDemTests(unittest.TestCase):

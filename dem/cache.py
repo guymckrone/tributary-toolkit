@@ -104,6 +104,9 @@ def lookup(
         if len(projected) != 4:
             return None
         nodata = data.get("nodata")
+        # Missing key: this file was cached before the zero check.
+        # null means the check ran and there was nothing to say.
+        known = "zero_warning" in data
         return DemResult(
             path=str(tif_path),
             provider=str(data["provider"]),
@@ -124,6 +127,8 @@ def lookup(
             fill_used=bool(data.get("fill_used", False)),
             nodata=None if nodata is None else float(nodata),
             clip_name=_optional_text(data, "clip_name"),
+            zero_warning=_optional_text(data, "zero_warning") if known else None,
+            zero_warning_known=known,
         )
     except (OSError, ValueError, KeyError, TypeError):
         return None
@@ -179,6 +184,7 @@ def store(
         "fill_used": result.fill_used,
         "nodata": result.nodata,
         "clip_name": result.clip_name,
+        "zero_warning": result.zero_warning,
     }
     temporary = json_path.with_suffix(".json.tmp")
     temporary.write_text(json.dumps(payload, indent=2), encoding="utf-8")
@@ -203,6 +209,8 @@ def store(
         fill_used=result.fill_used,
         nodata=result.nodata,
         clip_name=result.clip_name,
+        zero_warning=result.zero_warning,
+        zero_warning_known=True,
     )
 
 

@@ -118,6 +118,14 @@ class DemResult:
     # File name of an uploaded outline, when the raster was clipped
     # to it. None for a plain rectangle.
     clip_name: Optional[str] = None
+    # Set when a locked flight's footprint is a sheet of exact
+    # zeros. The raster is unchanged. None when there is nothing
+    # to flag, including the unlocked mosaic.
+    zero_warning: Optional[str] = None
+    # False on a sidecar from before this check. The next read
+    # can measure that TIFF. True once the check has run,
+    # including when the sentence stayed empty.
+    zero_warning_known: bool = False
 
 
 @dataclass(frozen=True)

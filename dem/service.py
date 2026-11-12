@@ -10,7 +10,12 @@ from typing import Optional
 
 from .boundary import Boundary, footprint_bounds
 from .cache import cache_key, default_cache_dir, lookup, store
-from .composite import NODATA, describe_lock, punch_outside_file
+from .composite import (
+    NODATA,
+    describe_lock,
+    punch_outside_file,
+    warning_for_saved_raster,
+)
 from .models import DemEstimate, DemRequest, DemResult
 from .registry import create_provider, list_providers
 
@@ -117,6 +122,11 @@ def get_dem(
     directory.mkdir(parents=True, exist_ok=True)
     cached = lookup(request, directory, collection_key, fill_key, token)
     if cached is not None:
+        # A locked file from before the check has no sentence yet.
+        # Measure the TIFF we already saved. A fresh file already
+        # has the sentence, so this is skipped.
+        if cached.collection_key and not cached.zero_warning_known:
+            cached = _backfill_zero_warning(cached)
         return cached
     if footprint is not None:
         _check_clip_overlaps(request, footprint)
@@ -178,6 +188,20 @@ def get_dem(
         request, fetched, directory, collection_key, fill_key, token,
         footprint, clip_name,
     )
+
+
+def _backfill_zero_warning(result: DemResult) -> DemResult:
+    """Read an older locked TIFF and attach the zero sentence.
+
+    A file that is not a float TIFF is left alone. The download
+    still returns.
+    """
+    nodata = NODATA if result.nodata is None else result.nodata
+    try:
+        warning = warning_for_saved_raster(result.path, nodata)
+    except (OSError, ValueError):
+        return result
+    return replace(result, zero_warning=warning or None, zero_warning_known=True)
 
 
 def _clip_parts(clip):

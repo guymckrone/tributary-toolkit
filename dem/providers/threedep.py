@@ -23,10 +23,12 @@ from .base import DemProvider
 from ..composite import (
     NODATA,
     composite_arrays,
+    count_exact_zeros,
     footprint_mask,
     read_float_tiff,
     write_float_tiff,
     write_grid_tiff,
+    zero_warning,
 )
 from ..tiles import crop_to_core, request_bounds, tile_windows
 from ..aoi import (
@@ -385,12 +387,16 @@ class ThreeDepProvider(DemProvider):
         windows = self._windows(grid)
         path = Path(out_path)
         if len(windows) == 1:
-            stacked, template = self._lock_one(grid, windows[0], primary, fill)
+            stacked, template, covered, zeros = self._lock_one(
+                grid, windows[0], primary, fill
+            )
             write_float_tiff(template, stacked, path, NODATA)
         else:
             # Same mosaic rule on every piece. The stitch is one
             # grid, so a later reader cannot tell the pieces apart.
-            stacked = self._lock_many(grid, windows, primary, fill)
+            stacked, covered, zeros = self._lock_many(
+                grid, windows, primary, fill
+            )
             write_grid_tiff(
                 stacked,
                 path,
@@ -400,6 +406,7 @@ class ThreeDepProvider(DemProvider):
                 resolution_m=grid.resolution_m,
                 nodata=NODATA,
             )
+        warning = zero_warning(covered, zeros)
         coarsest = float(primary.resolution_m)
         if fill is not None and fill.resolution_m > coarsest:
             coarsest = float(fill.resolution_m)
@@ -422,6 +429,8 @@ class ThreeDepProvider(DemProvider):
             fill_period=None if fill is None else fill.period_label(),
             fill_used=fill is not None,
             nodata=NODATA,
+            zero_warning=warning or None,
+            zero_warning_known=True,
         )
 
     def _tile_count(self, grid: PixelGrid) -> int:
@@ -484,15 +493,17 @@ class ThreeDepProvider(DemProvider):
             fill_core, _fill_image = self._download_core(
                 grid, window, mosaic_rule_for(fill), fill.name
             )
-        stacked = self._stack_core(
+        stacked, covered, zeros = self._stack_core(
             grid, window, primary, primary_core, fill, fill_core
         )
-        return stacked, image
+        return stacked, image, covered, zeros
 
     def _lock_many(self, grid: PixelGrid, windows, primary, fill):
         out = np.full(
             (grid.height_px, grid.width_px), NODATA, dtype=np.float32
         )
+        covered = 0
+        zeros = 0
         for window in windows:
             primary_core, _image = self._download_core(
                 grid, window, mosaic_rule_for(primary), primary.name
@@ -502,13 +513,16 @@ class ThreeDepProvider(DemProvider):
                 fill_core, _fill_image = self._download_core(
                     grid, window, mosaic_rule_for(fill), fill.name
                 )
+            stacked, one_covered, one_zeros = self._stack_core(
+                grid, window, primary, primary_core, fill, fill_core
+            )
+            covered += one_covered
+            zeros += one_zeros
             out[
                 window.row0:window.row1,
                 window.col0:window.col1,
-            ] = self._stack_core(
-                grid, window, primary, primary_core, fill, fill_core
-            )
-        return out
+            ] = stacked
+        return out, covered, zeros
 
     def _stack_core(self, grid, window, primary, primary_core, fill, fill_core):
         zone = grid.epsg - 26900
@@ -535,9 +549,11 @@ class ThreeDepProvider(DemProvider):
                 height,
                 grid.resolution_m,
             )
-        return composite_arrays(
+        covered, zeros = count_exact_zeros(primary_core, primary_inside)
+        stacked = composite_arrays(
             primary_core, primary_inside, fill_core, fill_inside
         )
+        return stacked, covered, zeros
 
     def _check_shape(self, values, grid: PixelGrid, name: str) -> None:
         height, width = values.shape

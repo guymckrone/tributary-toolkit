@@ -15,9 +15,11 @@ from dem.collections import _point_in_ring
 from dem.composite import (
     NODATA,
     composite_arrays,
+    count_exact_zeros,
     footprint_mask,
     read_float_tiff,
     write_float_tiff,
+    zero_warning,
 )
 
 
@@ -43,6 +45,33 @@ class CompositeTests(unittest.TestCase):
         stacked = composite_arrays(primary, inside)
         self.assertEqual(float(stacked[0, 0]), 4.0)
         self.assertEqual(float(stacked[0, 1]), NODATA)
+
+
+class ZeroWarningTests(unittest.TestCase):
+    def test_count_ignores_zeros_outside_the_footprint(self):
+        values = np.array([[0.0, 5.0], [0.0, 0.0]], dtype=np.float32)
+        inside = np.array([[True, True], [False, True]])
+        covered, zeros = count_exact_zeros(values, inside)
+        self.assertEqual(covered, 3)
+        self.assertEqual(zeros, 2)
+
+    def test_a_few_zeros_stay_quiet(self):
+        self.assertEqual(zero_warning(100, 1), "")
+        self.assertEqual(zero_warning(None, None), "")
+        self.assertEqual(zero_warning(10, 0), "")
+
+    def test_a_sheet_of_zeros_is_named(self):
+        text = zero_warning(10, 10)
+        self.assertIn("every cell inside", text)
+        partial = zero_warning(100, 5)
+        self.assertIn("5%", partial)
+        self.assertNotIn("every cell inside", partial)
+
+    def test_mask_shape_must_match(self):
+        values = np.zeros((2, 2), dtype=np.float32)
+        inside = np.array([[True, False]])
+        with self.assertRaises(ValueError):
+            count_exact_zeros(values, inside)
 
 
 class FootprintMaskTests(unittest.TestCase):

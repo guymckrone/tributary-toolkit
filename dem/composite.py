@@ -30,6 +30,64 @@ NODATA = -999999.0
 _GEO_TAGS = (33550, 33922, 34735, 34736, 34737)
 
 
+# Share of the footprint that is the exact value 0 before I say so.
+# A few cells can be sea level. The Austin flight on Nov 11 was
+# every cell, and identify on that spot said NoData.
+_ZERO_WARN_SHARE = 0.05
+
+
+def count_exact_zeros(values, inside):
+    """How many footprint cells there are, and how many are exact 0.
+
+    Called on the primary, before the fill is copied in. A 0
+    outside the footprint is a hole, and the mask already turns
+    that into nodata, so it is not part of this count.
+    """
+    values = np.asarray(values, dtype=np.float32)
+    inside = np.asarray(inside, dtype=bool)
+    if inside.shape != values.shape:
+        raise ValueError("Zero count mask shape does not match the raster.")
+    covered = int(inside.sum())
+    zeros = int(np.count_nonzero(inside & (values == 0)))
+    return covered, zeros
+
+
+def zero_warning(inside_count, zero_count) -> str:
+    """A sentence when a locked flight came back full of exact zeros.
+
+    Empty string when there is nothing to say. I do not change
+    the raster. Every inside cell at 0 gets the strong sentence.
+    A smaller sheet, at least five percent, gets the percentage.
+    """
+    if inside_count is None or zero_count is None:
+        return ""
+    if inside_count <= 0 or zero_count <= 0:
+        return ""
+    if zero_count >= inside_count:
+        return "Warning: every cell inside this flight is 0. 3DEP has no elevation here."
+    if zero_count / inside_count < _ZERO_WARN_SHARE:
+        return ""
+    pct = int(round(100 * zero_count / inside_count))
+    return (
+        f"Warning: {pct}% of cells inside this flight are 0. "
+        "Check shorelines before using."
+    )
+
+
+def warning_for_saved_raster(path, nodata: float) -> str:
+    """Same warning, read back from a finished GeoTIFF.
+
+    For a cache file written before the count existed. Nodata
+    cells are the holes and the clip. I only look at cells that
+    still hold an elevation.
+    """
+    values, _image = read_float_tiff(Path(path).read_bytes())
+    flat = np.asarray(values, dtype=np.float32).ravel()
+    kept = np.isfinite(flat) & (flat != np.float32(nodata))
+    zeros = int(np.count_nonzero(kept & (flat == 0)))
+    return zero_warning(int(kept.sum()), zeros)
+
+
 def describe_lock(primary, fill, fill_used: bool) -> str:
     """One sentence block for DemResult.source_description."""
     text = (
