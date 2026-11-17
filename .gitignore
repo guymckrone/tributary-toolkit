@@ -37,3 +37,7 @@ streamstats/data/nhdplus_v2/**
 # DEM GeoTIFFs from get_dem(). Keep the README.
 dem/data/cache/**
 !dem/data/cache/README.md
+
+# Terrain prep rasters from prepare_terrain(). Keep the README.
+terrain/data/cache/**
+!terrain/data/cache/README.md
