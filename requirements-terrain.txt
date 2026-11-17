@@ -1,0 +1,8 @@
+# Terrain tools. Install into the cloned env only:
+#   conda activate datadownload-geo
+#   pip install -r requirements-terrain.txt
+#
+# Do not install this into datadownload. A native geo install
+# has broken NumPy in that env before. Slice 0 (Nov 12, 2026)
+# confirmed numpy 2.4.2 still imports after this pin.
+whitebox_workflows==2.0.6
